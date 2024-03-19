@@ -1,0 +1,144 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <ArduinoJson.h>
+
+const char* ssid = "_Ext";
+const char* password = "";
+
+// Water flow sensor connections
+const int flowSensorPin = D2;
+
+// Variables
+volatile int pulseCount;
+float calibrationFactor = 7.5; // Adjust this value based on calibration
+float flowRate;
+float totalCubicMeters;
+unsigned long oldTime;
+
+// Web server port
+const int serverPort = 80;
+WiFiServer server(serverPort);
+
+void ICACHE_RAM_ATTR pulseCounter() // Add ICACHE_RAM_ATTR attribute for ESP8266
+{
+  pulseCount++;
+}
+
+void setup() {
+  Serial.begin(9600);
+  delay(10);
+
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(5000);
+    Serial.println("Connecting to WiFi...");
+  }
+
+  Serial.println("Connected to WiFi");
+
+  // Configure flow sensor pin as input
+  pinMode(flowSensorPin, INPUT_PULLUP);
+
+  // Initialize variables
+  pulseCount = 0;
+  flowRate = 0.0;
+  totalCubicMeters = 0.0;
+  oldTime = millis();
+
+  // Attach interrupt to the flow sensor pin
+  attachInterrupt(digitalPinToInterrupt(flowSensorPin), pulseCounter, RISING);
+
+  // Start the web server
+  server.begin(); 
+}
+
+unsigned long lastSendTime = 0;
+const unsigned long sendInterval = 1000; // 30 seconds
+
+void handleResetRequest() {
+  totalCubicMeters = 0.0;
+  Serial.println("Consumption reset");
+  oldTime = millis(); // Reset the timing mechanism
+}
+
+void loop()
+{
+  // Handle HTTP requests
+  WiFiClient client = server.available();
+  if (client) {
+    while (client.connected()) {
+      if (client.available()) {
+        // Read the request
+        String request = client.readStringUntil('\r');
+        client.flush();
+        
+        // Check if the request contains the reset command
+        if (request.indexOf("/reset") != -1) {
+          handleResetRequest();
+          
+          // Reconnect to WiFi
+          while (WiFi.status() != WL_CONNECTED) {
+            Serial.println("Attempting to reconnect to WiFi...");
+            WiFi.begin(ssid, password);
+          }
+          
+          Serial.println("Reconnected to WiFi");
+        }
+      }
+    }
+  }
+
+  // Calculate flow rate and total cubic meters passed
+  unsigned long currentTime = millis();
+  unsigned long elapsedTime = currentTime - oldTime;
+
+  if (elapsedTime >= 1)  // Every millisecond
+  {
+    // Calculate flow rate in cubic meters/second
+    flowRate = ((1000.0 / elapsedTime) * pulseCount) / calibrationFactor;
+    pulseCount = 0;
+
+    // Calculate total cubic meters passed
+    totalCubicMeters += (flowRate / 3600000.0) * elapsedTime; // Convert milliseconds to hours
+
+    // Print the results
+    Serial.print("Total cubic meters: ");
+    Serial.print(totalCubicMeters);
+    Serial.println(" cubic meters");
+    Serial.println("ip :" + WiFi.localIP().toString());
+    
+    oldTime = currentTime;
+  }
+  if (currentTime - lastSendTime >= sendInterval) {
+    // Send data to server
+    sendRequest(totalCubicMeters);
+    lastSendTime = currentTime;
+  }
+}
+
+void sendRequest(float data) {
+  WiFiClient client;
+  HTTPClient http;
+
+  String url = "http://10.0.22.51/waterdata/data.php"; // Make sure to include the protocol (http://)
+  String getData = "data=" + String(data);
+
+  String request = url + "?" + getData;
+
+  Serial.print("Sending request: ");
+  Serial.println(request);
+
+  if (http.begin(client, request)) { // Use begin(WiFiClient, url) function
+    int httpCode = http.GET();
+    String response = http.getString();
+    Serial.print("HTTP response code: ");
+    Serial.println(httpCode);
+    Serial.print("Response from server: ");
+    Serial.println(response);
+
+    http.end();
+  } else {
+    Serial.println("Unable to connect to server");
+  }
+}
