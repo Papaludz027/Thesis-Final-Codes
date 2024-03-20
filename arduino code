@@ -2,7 +2,7 @@
 #include <ESP8266HTTPClient.h>
 #include <ArduinoJson.h>
 
-const char* ssid = "_Ext";
+const char* ssid = "P55";
 const char* password = "";
 
 // Water flow sensor connections
@@ -121,7 +121,7 @@ void sendRequest(float data) {
   WiFiClient client;
   HTTPClient http;
 
-  String url = "http://10.0.22.51/waterdata/data.php"; // Make sure to include the protocol (http://)
+  String url = "http://192.168.175.103/waterdata/data.php"; // Make sure to include the protocol (http://)
   String getData = "data=" + String(data);
 
   String request = url + "?" + getData;
